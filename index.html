@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>용용이 무비</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"Noto Sans KR",sans-serif;background:#141418;color:#eee;padding:12px 12px 90px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+h1{font-size:20px}
+button{font-family:inherit;cursor:pointer}
+.icon{background:none;border:none;font-size:22px;color:#eee}
+#stats{display:flex;gap:6px;margin-bottom:10px}
+#stats div{flex:1;background:#22222a;border-radius:10px;padding:8px;text-align:center;font-size:12px;color:#aaa}
+#stats b{display:block;font-size:20px;color:#ffc94d}
+input,textarea,select{width:100%;padding:10px;border-radius:10px;border:1px solid #333;background:#22222a;color:#eee;font-size:15px;font-family:inherit}
+.bar{display:flex;gap:8px;margin:8px 0 12px}
+.seg{display:flex;flex:1;background:#22222a;border-radius:10px;overflow:hidden}
+.seg button{flex:1;padding:9px 0;border:none;background:none;color:#aaa;font-size:14px}
+.seg button.on{background:#ffc94d;color:#141418;font-weight:bold}
+.bar select{width:100px}
+#list{list-style:none}
+#list li{display:flex;align-items:center;gap:12px;padding:8px;border-bottom:1px solid #26262e}
+.thumb{width:46px;height:69px;border-radius:6px;object-fit:cover;background:#2a2a33;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px}
+#list li span{font-size:16px}
+.empty{text-align:center;color:#777;padding:40px 0}
+.fab{position:fixed;right:20px;bottom:24px;width:58px;height:58px;border-radius:50%;border:none;background:#ffc94d;color:#141418;font-size:32px;box-shadow:0 4px 12px #0008}
+.modal{position:fixed;inset:0;background:#000b;display:flex;align-items:flex-end;z-index:10}
+.hidden{display:none}
+.sheet{background:#1c1c22;width:100%;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:16px}
+.sheet h2{font-size:20px;margin-bottom:4px}
+.sub{color:#999;font-size:13px;margin-bottom:12px}
+.big{display:block;width:60%;max-width:260px;margin:0 auto 14px;border-radius:10px}
+.sec{margin-top:14px}
+.sec h3{font-size:13px;color:#ffc94d;margin-bottom:4px}
+.sec p{font-size:15px;line-height:1.6;white-space:pre-wrap}
+.btns{display:flex;gap:8px;margin-top:18px}
+.btns button{flex:1;padding:12px;border-radius:10px;border:none;font-size:15px;background:#2e2e38;color:#eee}
+.btns .main{background:#ffc94d;color:#141418;font-weight:bold}
+.btns .del{background:#5a2a2a}
+.res{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #2a2a33}
+.res small{color:#999;display:block}
+.star{font-size:32px;color:#444}
+.star.on{color:#ffc94d}
+label{display:block;font-size:13px;color:#aaa;margin:12px 0 4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎬 용용이 무비</h1>
+  <button class="icon" onclick="showSettings()">⚙️</button>
+</header>
+
+<div id="stats"></div>
+<input id="q" placeholder="🔍 제목 검색" oninput="render()">
+<div class="bar">
+  <div class="seg" id="typeSeg">
+    <button data-v="all" class="on">전체</button>
+    <button data-v="movie">영화</button>
+    <button data-v="tv">드라마</button>
+  </div>
+  <select id="sort" onchange="render()">
+    <option value="date">본 순서</option>
+    <option value="name">이름순</option>
+    <option value="rating">별점순</option>
+  </select>
+</div>
+<ul id="list"></ul>
+<button class="fab" onclick="showSearch()">＋</button>
+
+<div id="modal" class="modal hidden" onclick="if(event.target===this)closeModal()">
+  <div class="sheet" id="sheet"></div>
+</div>
+
+<script>
+const IMG = 'https://image.tmdb.org/t/p/';
+const API = 'https://api.themoviedb.org/3';
+let cfg = JSON.parse(localStorage.getItem('moveCfg') || '{}');
+let sb = null, items = [], type = 'all';
+const $ = id => document.getElementById(id);
+
+function esc(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function thumb(p){ return p ? `<img class="thumb" src="${IMG}w92${p}">` : `<div class="thumb">🎞️</div>`; }
+function stars(n){ return n ? '★'.repeat(n) + '☆'.repeat(5-n) : '-'; }
+function today(){ const d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,10); }
+function openModal(html){ $('sheet').innerHTML = html; $('modal').classList.remove('hidden'); $('sheet').scrollTop = 0; }
+function closeModal(){ $('modal').classList.add('hidden'); }
+
+/* ---------- 시작 ---------- */
+function init(){
+  if(!cfg.tmdb || !cfg.url || !cfg.key){ showSettings(); return; }
+  sb = supabase.createClient(cfg.url, cfg.key);
+  load();
+}
+
+async function load(){
+  const { data, error } = await sb.from('movies').select('*');
+  if(error){ alert('불러오기 실패: ' + error.message); return; }
+  items = data;
+  render();
+}
+
+/* ---------- 목록 ---------- */
+document.querySelectorAll('#typeSeg button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#typeSeg button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); type = b.dataset.v; render();
+});
+
+function render(){
+  const q = $('q').value.trim().toLowerCase();
+  const s = $('sort').value;
+  let arr = items.filter(m =>
+    (type === 'all' || m.media_type === type) &&
+    (!q || m.title.toLowerCase().includes(q) || (m.original_title||'').toLowerCase().includes(q))
+  );
+  arr.sort((a,b) =>
+    s === 'name'   ? a.title.localeCompare(b.title, 'ko') :
+    s === 'rating' ? (b.rating||0) - (a.rating||0) :
+    (b.watched_date||'').localeCompare(a.watched_date||'') || b.id - a.id
+  );
+  $('list').innerHTML = arr.length
+    ? arr.map(m => `<li onclick="showDetail(${m.id})">${thumb(m.poster_path)}<span>${esc(m.title)}</span></li>`).join('')
+    : '<p class="empty">아직 기록이 없습니다.<br>＋ 버튼으로 추가해 보세요.</p>';
+
+  const y = String(new Date().getFullYear());
+  const thisYear = items.filter(m => (m.watched_date||'').startsWith(y));
+  $('stats').innerHTML = `
+    <div><b>${thisYear.filter(m=>m.media_type==='movie').length}</b>${y} 영화</div>
+    <div><b>${thisYear.filter(m=>m.media_type==='tv').length}</b>${y} 드라마</div>
+    <div><b>${items.length}</b>전체</div>`;
+}
+
+/* ---------- 상세 ---------- */
+function showDetail(id){
+  const m = items.find(x => x.id === id);
+  openModal(`
+    ${m.poster_path ? `<img class="big" src="${IMG}w500${m.poster_path}">` : ''}
+    <h2>${esc(m.title)}</h2>
+    <div class="sub">${m.media_type==='tv'?'드라마':'영화'} · ${esc(m.year)} ${m.original_title && m.original_title!==m.title ? '· '+esc(m.original_title) : ''}</div>
+    <div class="sec"><h3>내 별점</h3><p style="color:#ffc94d;font-size:20px">${stars(m.rating)}</p></div>
+    <div class="sec"><h3>본 날짜</h3><p>${m.watched_date||'-'}</p></div>
+    ${m.review ? `<div class="sec"><h3>한줄평</h3><p>${esc(m.review)}</p></div>` : ''}
+    <div class="sec"><h3>출연진</h3><p>${esc(m.cast_list)||'-'}</p></div>
+    <div class="sec"><h3>줄거리</h3><p>${esc(m.overview)||'-'}</p></div>
+    <div class="btns">
+      <button class="del" onclick="delItem(${m.id})">삭제</button>
+      <button onclick="showForm(null, ${m.id})">수정</button>
+      <button class="main" onclick="closeModal()">닫기</button>
+    </div>`);
+}
+
+async function delItem(id){
+  if(!confirm('삭제할까요?')) return;
+  const { error } = await sb.from('movies').delete().eq('id', id);
+  if(error){ alert('삭제 실패: ' + error.message); return; }
+  closeModal(); load();
+}
+
+/* ---------- 검색 (TMDB) ---------- */
+function showSearch(){
+  openModal(`
+    <h2>작품 추가</h2>
+    <div class="sub">영화·드라마 제목을 검색하세요</div>
+    <input id="sq" placeholder="예: 범죄도시" onkeydown="if(event.key==='Enter')doSearch()">
+    <div class="btns" style="margin-top:8px"><button class="main" onclick="doSearch()">검색</button></div>
+    <div id="sres" style="margin-top:10px"></div>`);
+  setTimeout(() => $('sq').focus(), 100);
+}
+
+let lastResults = [];
+async function doSearch(){
+  const q = $('sq').value.trim(); if(!q) return;
+  $('sres').innerHTML = '<p class="empty">검색 중...</p>';
+  try{
+    const r = await fetch(`${API}/search/multi?api_key=${cfg.tmdb}&language=ko-KR&query=${encodeURIComponent(q)}`);
+    const d = await r.json();
+    if(d.success === false){ $('sres').innerHTML = `<p class="empty">TMDB 오류: ${esc(d.status_message)}</p>`; return; }
+    lastResults = (d.results||[]).filter(x => x.media_type==='movie' || x.media_type==='tv');
+    $('sres').innerHTML = lastResults.length ? lastResults.map((x,i) => `
+      <div class="res" onclick="pick(${i})">${thumb(x.poster_path)}
+        <div><b>${esc(x.title||x.name)}</b>
+        <small>${x.media_type==='tv'?'드라마':'영화'} · ${(x.release_date||x.first_air_date||'').slice(0,4)}</small></div>
+      </div>`).join('') : '<p class="empty">결과가 없습니다</p>';
+  }catch(e){ $('sres').innerHTML = '<p class="empty">검색 실패 (인터넷 확인)</p>'; }
+}
+
+async function pick(i){
+  const x = lastResults[i];
+  $('sres').innerHTML = '<p class="empty">정보 불러오는 중...</p>';
+  const t = x.media_type;
+  const r = await fetch(`${API}/${t}/${x.id}?api_key=${cfg.tmdb}&language=ko-KR&append_to_response=credits`);
+  const d = await r.json();
+  let overview = d.overview;
+  if(!overview){
+    const e = await (await fetch(`${API}/${t}/${x.id}?api_key=${cfg.tmdb}&language=en-US`)).json();
+    overview = e.overview || '';
+  }
+  const data = {
+    tmdb_id: d.id,
+    media_type: t,
+    title: d.title || d.name,
+    original_title: d.original_title || d.original_name,
+    year: (d.release_date || d.first_air_date || '').slice(0,4),
+    poster_path: d.poster_path,
+    overview,
+    cast_list: (d.credits?.cast || []).slice(0,10).map(c => c.name).join(', ')
+  };
+  showForm(data, null);
+}
+
+/* ---------- 저장 폼 (날짜·별점·한줄평) ---------- */
+let formData = null, editId = null, curRating = 0;
+function showForm(data, id){
+  editId = id;
+  formData = id ? items.find(x => x.id === id) : data;
+  curRating = formData.rating || 0;
+  openModal(`
+    ${formData.poster_path ? `<img class="big" style="width:35%" src="${IMG}w342${formData.poster_path}">` : ''}
+    <h2>${esc(formData.title)}</h2>
+    <div class="sub">${formData.media_type==='tv'?'드라마':'영화'} · ${esc(formData.year)}</div>
+    <label>본 날짜</label>
+    <input type="date" id="fdate" value="${formData.watched_date || today()}">
+    <label>내 별점</label>
+    <div id="fstars"></div>
+    <label>한줄평</label>
+    <textarea id="frev" rows="2" placeholder="짧은 감상">${esc(formData.review||'')}</textarea>
+    <div class="btns">
+      <button onclick="closeModal()">취소</button>
+      <button class="main" onclick="saveItem()">저장</button>
+    </div>`);
+  drawStars();
+}
+function drawStars(){
+  $('fstars').innerHTML = [1,2,3,4,5].map(n =>
+    `<span class="star ${n<=curRating?'on':''}" onclick="curRating=(curRating===${n}?0:${n});drawStars()">★</span>`).join('');
+}
+
+async function saveItem(){
+  const row = {
+    watched_date: $('fdate').value || null,
+    rating: curRating,
+    review: $('frev').value.trim()
+  };
+  let res;
+  if(editId){
+    res = await sb.from('movies').update(row).eq('id', editId);
+  }else{
+    res = await sb.from('movies').insert({ ...formData, ...row });
+  }
+  if(res.error){ alert('저장 실패: ' + res.error.message); return; }
+  closeModal(); await load();
+  if(editId) showDetail(editId);
+}
+
+/* ---------- 설정 ---------- */
+function showSettings(){
+  openModal(`
+    <h2>⚙️ 설정</h2>
+    <div class="sub">처음 한 번만 입력하면 이 폰에 저장됩니다</div>
+    <label>TMDB API 키 (v3)</label>
+    <input id="s1" value="${esc(cfg.tmdb||'')}">
+    <label>Supabase URL</label>
+    <input id="s2" value="${esc(cfg.url||'')}" placeholder="https://xxxx.supabase.co">
+    <label>Supabase anon 키</label>
+    <input id="s3" value="${esc(cfg.key||'')}">
+    <div class="btns">
+      <button onclick="closeModal()">닫기</button>
+      <button class="main" onclick="saveSettings()">저장</button>
+    </div>`);
+}
+function saveSettings(){
+  cfg = { tmdb: $('s1').value.trim(), url: $('s2').value.trim(), key: $('s3').value.trim() };
+  if(!cfg.tmdb || !cfg.url || !cfg.key){ alert('세 칸 모두 입력해 주세요'); return; }
+  localStorage.setItem('moveCfg', JSON.stringify(cfg));
+  closeModal(); init();
+}
+
+init();
+</script>
+</body>
+</html>
