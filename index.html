@@ -175,6 +175,7 @@ function showSearch(){
 let lastResults = [];
 async function doSearch(){
   const q = $('sq').value.trim(); if(!q) return;
+  $('sq').blur();
   $('sres').innerHTML = '<p class="empty">검색 중...</p>';
   try{
     const r = await fetch(`${API}/search/multi?api_key=${cfg.tmdb}&language=ko-KR&query=${encodeURIComponent(q)}`);
