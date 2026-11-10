@@ -48,6 +48,9 @@ input,textarea,select{width:100%;padding:10px;border-radius:10px;border:1px soli
 .star{font-size:32px;color:#444}
 .star.on{color:#ffc94d}
 label{display:block;font-size:13px;color:#aaa;margin:12px 0 4px}
+.tabs{margin-bottom:10px}
+.tabs button{padding:11px 0;font-size:16px}
+.tabs button.on{background:#4d9fff;color:#fff}
 </style>
 </head>
 <body>
@@ -56,6 +59,10 @@ label{display:block;font-size:13px;color:#aaa;margin:12px 0 4px}
   <button class="icon" onclick="showSettings()">⚙️</button>
 </header>
 
+<div class="seg tabs" id="viewSeg">
+  <button data-v="watched" class="on">본 작품</button>
+  <button data-v="want">볼 작품</button>
+</div>
 <div id="stats"></div>
 <input id="q" placeholder="🔍 제목 검색" oninput="render()">
 <div class="bar">
@@ -81,7 +88,8 @@ label{display:block;font-size:13px;color:#aaa;margin:12px 0 4px}
 const IMG = 'https://image.tmdb.org/t/p/';
 const API = 'https://api.themoviedb.org/3';
 let cfg = JSON.parse(localStorage.getItem('moveCfg') || '{}');
-let sb = null, items = [], type = 'all';
+let sb = null, items = [], type = 'all', view = 'watched';
+const st = m => m.status || 'watched';
 const $ = id => document.getElementById(id);
 
 function esc(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -106,6 +114,14 @@ async function load(){
 }
 
 /* ---------- 목록 ---------- */
+function setView(v){
+  view = v;
+  document.querySelectorAll('#viewSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === v));
+  $('sort').options[0].text = v === 'want' ? '추가 순서' : '본 순서';
+  render();
+}
+document.querySelectorAll('#viewSeg button').forEach(b => b.onclick = () => setView(b.dataset.v));
+
 document.querySelectorAll('#typeSeg button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#typeSeg button').forEach(x => x.classList.remove('on'));
   b.classList.add('on'); type = b.dataset.v; render();
@@ -115,29 +131,47 @@ function render(){
   const q = $('q').value.trim().toLowerCase();
   const s = $('sort').value;
   let arr = items.filter(m =>
+    st(m) === view &&
     (type === 'all' || m.media_type === type) &&
     (!q || m.title.toLowerCase().includes(q) || (m.original_title||'').toLowerCase().includes(q))
   );
   arr.sort((a,b) =>
     s === 'name'   ? a.title.localeCompare(b.title, 'ko') :
     s === 'rating' ? (b.rating||0) - (a.rating||0) :
+    view === 'want' ? b.id - a.id :
     (b.watched_date||'').localeCompare(a.watched_date||'') || b.id - a.id
   );
   $('list').innerHTML = arr.length
     ? arr.map(m => `<li onclick="showDetail(${m.id})">${thumb(m.poster_path)}<span>${esc(m.title)}</span></li>`).join('')
-    : '<p class="empty">아직 기록이 없습니다.<br>＋ 버튼으로 추가해 보세요.</p>';
+    : `<p class="empty">${view==='want'?'볼 작품이 없습니다.':'아직 기록이 없습니다.'}<br>＋ 버튼으로 추가해 보세요.</p>`;
 
   const y = String(new Date().getFullYear());
-  const thisYear = items.filter(m => (m.watched_date||'').startsWith(y));
+  const done = items.filter(m => st(m) === 'watched');
+  const thisYear = done.filter(m => (m.watched_date||'').startsWith(y));
   $('stats').innerHTML = `
     <div><b>${thisYear.filter(m=>m.media_type==='movie').length}</b>${y} 영화</div>
     <div><b>${thisYear.filter(m=>m.media_type==='tv').length}</b>${y} 드라마</div>
-    <div><b>${items.length}</b>전체</div>`;
+    <div><b>${done.length}</b>전체</div>`;
 }
 
 /* ---------- 상세 ---------- */
 function showDetail(id){
   const m = items.find(x => x.id === id);
+  if(st(m) === 'want'){
+    openModal(`
+    ${m.poster_path ? `<img class="big" src="${IMG}w500${m.poster_path}">` : ''}
+    <h2>${esc(m.title)}</h2>
+    <div class="sub">볼 작품 · ${m.media_type==='tv'?'드라마':'영화'} · ${esc(m.year)} ${m.original_title && m.original_title!==m.title ? '· '+esc(m.original_title) : ''}</div>
+    ${m.review ? `<div class="sec"><h3>메모</h3><p>${esc(m.review)}</p></div>` : ''}
+    <div class="sec"><h3>출연진</h3><p>${esc(m.cast_list)||'-'}</p></div>
+    <div class="sec"><h3>줄거리</h3><p>${esc(m.overview)||'-'}</p></div>
+    <div class="btns">
+      <button class="del" onclick="delItem(${m.id})">삭제</button>
+      <button onclick="closeModal()">닫기</button>
+    </div>
+    <div class="btns" style="margin-top:8px"><button class="main" onclick="showForm(null, ${m.id})">✅ 봤어요로 옮기기</button></div>`);
+    return;
+  }
   openModal(`
     ${m.poster_path ? `<img class="big" src="${IMG}w500${m.poster_path}">` : ''}
     <h2>${esc(m.title)}</h2>
@@ -211,7 +245,39 @@ async function pick(i){
     overview,
     cast_list: (d.credits?.cast || []).slice(0,10).map(c => c.name).join(', ')
   };
-  showForm(data, null);
+  showChoice(data);
+}
+
+/* ---------- 봤어요 / 볼 거예요 선택 ---------- */
+function showChoice(data){
+  formData = data; editId = null;
+  openModal(`
+    ${data.poster_path ? `<img class="big" style="width:35%" src="${IMG}w342${data.poster_path}">` : ''}
+    <h2>${esc(data.title)}</h2>
+    <div class="sub">${data.media_type==='tv'?'드라마':'영화'} · ${esc(data.year)}</div>
+    <div class="btns">
+      <button onclick="showWantForm()">👀 볼 거예요</button>
+      <button class="main" onclick="showForm(formData, null)">✅ 봤어요</button>
+    </div>`);
+}
+
+function showWantForm(){
+  openModal(`
+    ${formData.poster_path ? `<img class="big" style="width:35%" src="${IMG}w342${formData.poster_path}">` : ''}
+    <h2>${esc(formData.title)}</h2>
+    <div class="sub">볼 작품으로 저장</div>
+    <label>메모 (선택)</label>
+    <textarea id="wmemo" rows="2" placeholder="예: 친구 추천, 넷플릭스"></textarea>
+    <div class="btns">
+      <button onclick="closeModal()">취소</button>
+      <button class="main" onclick="saveWant()">저장</button>
+    </div>`);
+}
+
+async function saveWant(){
+  const { error } = await sb.from('movies').insert({ ...formData, status: 'want', rating: 0, watched_date: null, review: $('wmemo').value.trim() });
+  if(error){ alert('저장 실패: ' + error.message); return; }
+  closeModal(); setView('want'); load();
 }
 
 /* ---------- 저장 폼 (날짜·별점·한줄평) ---------- */
@@ -245,7 +311,8 @@ async function saveItem(){
   const row = {
     watched_date: $('fdate').value || null,
     rating: curRating,
-    review: $('frev').value.trim()
+    review: $('frev').value.trim(),
+    status: 'watched'
   };
   let res;
   if(editId){
@@ -254,7 +321,7 @@ async function saveItem(){
     res = await sb.from('movies').insert({ ...formData, ...row });
   }
   if(res.error){ alert('저장 실패: ' + res.error.message); return; }
-  closeModal(); await load();
+  closeModal(); setView('watched'); await load();
   if(editId) showDetail(editId);
 }
 
